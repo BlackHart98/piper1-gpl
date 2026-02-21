@@ -263,6 +263,143 @@ int piper_synthesize_start(struct piper_synthesizer *synth, const char *text,
     return PIPER_OK;
 }
 
+
+int piper_nsynthesize_start(struct piper_synthesizer *synth, const char *text, size_t text_len,
+                           const piper_synthesize_options *options) {
+    if (!synth) {
+        return PIPER_ERR_GENERIC;
+    }
+
+    if (espeak_SetVoiceByName(synth->espeak_voice.c_str()) != EE_OK) {
+        return PIPER_ERR_GENERIC;
+    }
+
+    // Clear state
+    while (!synth->phoneme_id_queue.empty()) {
+        synth->phoneme_id_queue.pop();
+    }
+    synth->chunk_samples.clear();
+
+    std::unique_ptr<piper_synthesize_options> default_options;
+    if (!options) {
+        default_options = std::make_unique<piper_synthesize_options>(
+            piper_default_synthesize_options(synth));
+        options = default_options.get();
+    }
+
+    synth->length_scale = options->length_scale;
+    synth->noise_scale = options->noise_scale;
+    synth->noise_w_scale = options->noise_w_scale;
+    synth->speaker_id = options->speaker_id;
+
+    // phonemize
+    std::vector<std::string> sentence_phonemes{""};
+    std::size_t current_idx = 0;
+    const void *text_ptr = text;
+    while (text_ptr != nullptr && current_idx <= text_len) {
+        int terminator = 0;
+        std::string terminator_str = "";
+
+        const char *phonemes = espeak_TextToPhonemesWithTerminator(
+            &text_ptr, espeakCHARS_AUTO, espeakPHONEMES_IPA, &terminator);
+
+        if (phonemes) {
+            sentence_phonemes[current_idx] += phonemes;
+        }
+
+        // Categorize terminator
+        terminator &= 0x000FFFFF;
+
+        if (terminator == CLAUSE_PERIOD) {
+            terminator_str = ".";
+        } else if (terminator == CLAUSE_QUESTION) {
+            terminator_str = "?";
+        } else if (terminator == CLAUSE_EXCLAMATION) {
+            terminator_str = "!";
+        } else if (terminator == CLAUSE_COMMA) {
+            terminator_str = ", ";
+        } else if (terminator == CLAUSE_COLON) {
+            terminator_str = ": ";
+        } else if (terminator == CLAUSE_SEMICOLON) {
+            terminator_str = "; ";
+        }
+
+        sentence_phonemes[current_idx] += terminator_str;
+
+        if ((terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE) {
+            sentence_phonemes.push_back("");
+            current_idx = sentence_phonemes.size() - 1;
+        }
+    }
+
+    // phonemes to ids
+    std::vector<Phoneme> sentence_codepoints;
+    std::vector<PhonemeId> sentence_ids;
+    for (auto &phonemes_str : sentence_phonemes) {
+        if (phonemes_str.empty()) {
+            continue;
+        }
+
+        sentence_codepoints.push_back(PHONEME_BOS);
+        sentence_ids.push_back(ID_BOS);
+
+        sentence_codepoints.push_back(PHONEME_BOS);
+        sentence_ids.push_back(ID_PAD);
+
+        sentence_codepoints.push_back(PHONEME_SEPARATOR);
+
+        auto phonemes_norm = una::norm::to_nfd_utf8(phonemes_str);
+        auto phonemes_range = una::ranges::utf8_view{phonemes_norm};
+        auto phonemes_iter = phonemes_range.begin();
+        auto phonemes_end = phonemes_range.end();
+
+        // Filter out (lang) switch (flags).
+        // These surround words from languages other than the current voice.
+        bool in_lang_flag = false;
+        while (phonemes_iter != phonemes_end) {
+            auto phoneme = *phonemes_iter;
+
+            if (in_lang_flag) {
+                if (phoneme == U')') {
+                    // End of (lang) switch
+                    in_lang_flag = false;
+                }
+            } else if (phoneme == U'(') {
+                // Start of (lang) switch
+                in_lang_flag = true;
+            } else {
+                // Look up ids
+                auto ids_for_phoneme = synth->phoneme_id_map.find(phoneme);
+                if (ids_for_phoneme != synth->phoneme_id_map.end()) {
+                    for (auto id : ids_for_phoneme->second) {
+                        sentence_codepoints.push_back(phoneme);
+                        sentence_ids.push_back(id);
+
+                        sentence_codepoints.push_back(phoneme);
+                        sentence_ids.push_back(ID_PAD);
+
+                        sentence_codepoints.push_back(PHONEME_SEPARATOR);
+                    }
+                }
+            }
+
+            phonemes_iter++;
+        }
+
+        sentence_codepoints.push_back(PHONEME_EOS);
+        sentence_ids.push_back(ID_EOS);
+        sentence_codepoints.push_back(PHONEME_SEPARATOR);
+
+        synth->phoneme_id_queue.emplace(
+            std::move(std::make_pair(sentence_codepoints, sentence_ids)));
+        sentence_ids.clear();
+    }
+
+    return PIPER_OK;
+}
+
+
+
 int piper_synthesize_next(struct piper_synthesizer *synth,
                           struct piper_audio_chunk *chunk) {
     if (!synth) {
@@ -371,7 +508,8 @@ int piper_synthesize_next(struct piper_synthesizer *synth,
 
     // Copy phonemes
     synth->chunk_phonemes = std::move(next_phonemes);
-    chunk->phonemes = synth->chunk_phonemes.data();
+    // chunk->phonemes = synth->chunk_phonemes.data();
+    chunk->phonemes = reinterpret_cast<const uint32_t*>(synth->chunk_phonemes.data());
     chunk->num_phonemes = synth->chunk_phonemes.size();
 
     // Copy phoneme ids
