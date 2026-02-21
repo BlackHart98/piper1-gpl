@@ -295,40 +295,43 @@ int piper_nsynthesize_start(struct piper_synthesizer *synth, const char *text, s
     // phonemize
     std::vector<std::string> sentence_phonemes{""};
     std::size_t current_idx = 0;
-    const void *text_ptr = text;
-    while (text_ptr != nullptr && current_idx <= text_len) {
-        int terminator = 0;
-        std::string terminator_str = "";
+    if (text != nullptr){
+        std::string text_str(text, text_len);
+        const void *text_ptr = text_str.data();
+        while (text_ptr != nullptr) {
+            int terminator = 0;
+            std::string terminator_str = "";
 
-        const char *phonemes = espeak_TextToPhonemesWithTerminator(
-            &text_ptr, espeakCHARS_AUTO, espeakPHONEMES_IPA, &terminator);
+            const char *phonemes = espeak_TextToPhonemesWithTerminator(
+                &text_ptr, espeakCHARS_AUTO, espeakPHONEMES_IPA, &terminator);
 
-        if (phonemes) {
-            sentence_phonemes[current_idx] += phonemes;
-        }
+            if (phonemes) {
+                sentence_phonemes[current_idx] += phonemes;
+            }
 
-        // Categorize terminator
-        terminator &= 0x000FFFFF;
+            // Categorize terminator
+            terminator &= 0x000FFFFF;
 
-        if (terminator == CLAUSE_PERIOD) {
-            terminator_str = ".";
-        } else if (terminator == CLAUSE_QUESTION) {
-            terminator_str = "?";
-        } else if (terminator == CLAUSE_EXCLAMATION) {
-            terminator_str = "!";
-        } else if (terminator == CLAUSE_COMMA) {
-            terminator_str = ", ";
-        } else if (terminator == CLAUSE_COLON) {
-            terminator_str = ": ";
-        } else if (terminator == CLAUSE_SEMICOLON) {
-            terminator_str = "; ";
-        }
+            if (terminator == CLAUSE_PERIOD) {
+                terminator_str = ".";
+            } else if (terminator == CLAUSE_QUESTION) {
+                terminator_str = "?";
+            } else if (terminator == CLAUSE_EXCLAMATION) {
+                terminator_str = "!";
+            } else if (terminator == CLAUSE_COMMA) {
+                terminator_str = ", ";
+            } else if (terminator == CLAUSE_COLON) {
+                terminator_str = ": ";
+            } else if (terminator == CLAUSE_SEMICOLON) {
+                terminator_str = "; ";
+            }
 
-        sentence_phonemes[current_idx] += terminator_str;
+            sentence_phonemes[current_idx] += terminator_str;
 
-        if ((terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE) {
-            sentence_phonemes.push_back("");
-            current_idx = sentence_phonemes.size() - 1;
+            if ((terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE) {
+                sentence_phonemes.push_back("");
+                current_idx = sentence_phonemes.size() - 1;
+            }
         }
     }
 
