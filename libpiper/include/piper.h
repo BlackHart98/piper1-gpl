@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#ifdef __cplusplus
 #include <uchar.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,7 +61,7 @@ typedef struct piper_audio_chunk {
    * 4. Advance your iterators in the phoneme id and alignment arrays by N
    * 5. Repeat
    */
-  const char32_t *phonemes;
+  const uint32_t *phonemes;
 
   /**
    * \brief Number of codepoints in phonemes.
@@ -189,6 +191,12 @@ piper_default_synthesize_options(piper_synthesizer *synth);
  * \return PIPER_OK or error code.
  */
 int piper_synthesize_start(piper_synthesizer *synth, const char *text,
+                           const piper_synthesize_options *options);
+
+/**
+ * This is a safe variant of the original code
+*/
+int piper_nsynthesize_start(struct piper_synthesizer *synth, const char *text, size_t text_len,
                            const piper_synthesize_options *options);
 
 /**
